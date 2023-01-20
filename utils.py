@@ -1,42 +1,65 @@
 import pandas as pd
 import numpy as np
-from catboost import CatBoostRegressor as cbr
 from datetime import datetime as dt
 from lightgbm import LGBMRegressor as lbr
-from xgboost import XGBRegressor as xgb
-from sklearn.ensemble import RandomForestRegressor as rf
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_squared_error, r2_score, accuracy_score
 import statsmodels.api as sm
 from statsmodels.graphics import tsaplots
 from statsmodels.tsa.seasonal import STL
-import optuna
 
-def loadTrainData():
-    data=pd.read_excel("data/Hackathon Data.xlsx",engine='openpyxl')
+def loadTrainData(filepath):
+    """
+    This function reads in an excel file "Hackathon Data.xlsx" in the data folder using the 'openpyxl' engine and loads it into a Pandas dataframe. 
+    It removes the rows where the Encoded_SKU_ID column is null. It also removes the columns containing the string "Unnamed" in the column names. 
+    It prints the shape of the dataframe and displays the first 5 rows of the dataframe. The function returns the modified dataframe.
+
+    Args:
+    filepath : string type 
+    Returns:
+    data : pandas dataframe
+    """
+    data=pd.read_excel(filepath,engine='openpyxl')
     data = data[~data.Encoded_SKU_ID.isna()]
     data = data[[i for i in data.columns if "Unnamed" not in i]]
-    print("Shape of Train Dataset: ", data.shape)
-    display(data.head())
     return data
 
-def loadValidationData():
-    val=pd.read_excel("data/Validation_Data.xlsx",engine='openpyxl')
+def loadValidationData(valid_data_path):
+    """
+    This function takes path of validation data as an argument and reads the file and returns new dataframe.
+
+    Args:
+    valid_data_path : string type 
+    Returns:
+    val : pandas dataframe
+    """
+    val=pd.read_excel(valid_data_path,engine='openpyxl')
     val = val[~val.Encoded_SKU_ID.isna()]
     val = val[[i for i in val.columns if "Unnamed" not in i]]
-    print("Shape of Validation Dataset: ", val.shape)
-    display(val.head())
     return val
 
-def externalDataSources():
-    dow_jones_index = pd.read_csv('data/dow_jones.csv')
-    gscpi = pd.read_csv('data/gscpi_data.csv',names = ["sales_date", "gscpi"])
+def externalDataSources(list_of_paths):
+    """
+    This function takes list of paths as an argument and reads the corresponding files and returns new dataframes.
+    The new dataframes are: 
+    1. 'dow_jones_index' - Dow Jones Index
+    2. 'gscpi' - Global Supply Chain Pressure Index 
+    3. 'owid' - Covid Cases Information
+    4. 'trend' - Trend information of the SKUs
+    Args:
+    list_of_paths : python list 
+    Returns:
+    dow_jones_index, gscpi, owid, trend : Four pandas dataframes
+    """
+    dowJones_path, gscpi_path, owid_path, trend_path = list_of_paths
+    dow_jones_index = pd.read_csv(dowJones_path)
+    gscpi = pd.read_csv(gscpi_path,names = ["sales_date", "gscpi"])
     gscpi["sales_date"] = pd.to_datetime(gscpi["sales_date"])
-    owid = pd.read_csv('data/owid-covid-data.csv')
+    owid = pd.read_csv(owid_path)
     owid = owid[owid["location"]=="United States"][["date", "total_cases", "new_cases"]].rename(columns = {"date":"sales_date"})
     owid["sales_date"] = pd.to_datetime(owid["sales_date"])
-    trend = pd.read_csv('data/norm_trend_all_skus.csv')
+    trend = pd.read_csv(trend_path)
     trend.columns = [i.lower() for i in trend.columns]
     trend = trend[["encoded_sku_id", "sales_date", "norm_trend"]]
     trend["sales_date"] = pd.to_datetime(trend["sales_date"])
@@ -193,7 +216,7 @@ def skuGroupFeats(x):
     x["units_lag1"] = x['daily_units'].shift(1)
     return x
 
-def get_norm_trend(x):
+def getNormTrend(x):
     """
     This function takes in a pandas dataframe as an argument and creates a new column 'trend' based on the 'daily_units' column.
     It uses the STL function from statsmodels package to decompose the time series data in the 'daily_units' column with a period of 365.
@@ -283,7 +306,8 @@ def cleanData(df):
     Returns:
     df : cleaned and transformed dataframe
     """
-    dow_jones_index, gscpi, owid, trend = externalDataSources()
+    list_of_paths = ['data/dow_jones.csv','data/gscpi_data.csv','data/owid-covid-data.csv','data/norm_trend_all_skus.csv']
+    dow_jones_index, gscpi, owid, trend = externalDataSources(list_of_paths)
     df = cleanNonObjColumns(df)
     df["daily_units"] = np.where(df.daily_units<0, 0, df.daily_units)
     dates = sorted(df.sales_date.unique())
@@ -344,7 +368,7 @@ def generateTimeSeriesSplits(trains, tests, df):
         tr,ts = df[df.sales_date.isin(tr)].copy(), df[df.sales_date.isin(ts)].copy()
         yield tr.sort_values(["encoded_sku_id","sales_date"]).reset_index(drop=True),ts.sort_values(["encoded_sku_id","sales_date"]).reset_index(drop=True)
 
-def OneDayForecast(trial):
+def OneDayForecast(trial, tr, ts):
     """
     This function is an objective function for an optimization algorithm. It is used to optimize the parameters of a lightgbm regressor (lbr) to minimize the mean squared error between the predicted values and actual values.
 
@@ -379,7 +403,7 @@ def OneDayForecast(trial):
     yts = reg.predict(ts.drop("daily_units",axis=1))
     return mean_squared_error(ts_save["daily_units"], yts, squared=False)
 
-def SevenDaysForecast(trial):
+def SevenDaysForecast(trial, tr, ts):
     """
     The function objective(trial) is using Optuna library to perform a hyperparameter optimization for the LightGBM model. 
     The trial object is passed to the function and it uses the suggest methods of this object to sample the hyperparameters.
