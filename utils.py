@@ -32,13 +32,33 @@ def addDateCols(df):
     df['day_of_week']=df['sales_date'].dt.dayofweek
     return df
 
-def addCovidGSCPI(df):
+def addCovidGSCPI(df, owid, gscpi, trend):
+    """
+    The addCovidGSCPI function takes a DataFrame df as an input and performs the following operations:
+
+    It uses the merge function to join the DataFrame owid with df on the 'sales_date' column. 
+    This is done using the 'left' merge method, which means that all the rows in df will be included in the merged DataFrame, 
+    but any rows in owid that don't match on the 'sales_date' column will be filled with NaN.
+
+    It then uses the merge function again to join the DataFrame gscpi with the merged DataFrame from step 1 on the 'sales_date' column. 
+    This is also done using the 'left' merge method.
+
+    Finally, it uses the merge function again to join the DataFrame trend with the merged DataFrame from step 2 on the 'encoded_sku_id' and 'sales_date' columns.
+    This is also done using the 'left' merge method.
+    The function returns the final merged DataFrame
+    It is assumed that owid, gscpi and trend are dataframes that have already been created and are available in the scope of the function, 
+    and that 'sales_date' and 'encoded_sku_id' are columns in df and trend respectively.
+    Args:
+    df : pandas dataframe containing a column 'sales_date' of datetime type
+    Returns:
+    df : pandas dataframe with new columns added
+    """
     df = df.merge(owid, how='left', on='sales_date')
     df = df.merge(gscpi, how='left', on='sales_date')
     df = df.merge(trend, how='left', on = ["encoded_sku_id", "sales_date"])
     return df
 
-def addMarket(df):
+def addMarket(df, dow_jones_index):
     """
     This function takes in a pandas dataframe as an argument and adds new columns to it based on the Dow Jones index.
     It first copies the Dow Jones index and converts the date column to datetime format. Then it renames the columns
@@ -174,6 +194,11 @@ def featureEng(df):
     The proximity is calculated by taking the minimum difference of the date and all the black friday dates and dividing it by 691200 (number of seconds in 8 days).
     It applies the 'dateGroupFeats' function on the dataframe grouped by 'sales_date' and then applies the 'skuGroupFeats' function on the dataframe grouped by 'encoded_sku_id'.
     It returns the modified dataframe.
+
+    Args:
+    df : pandas dataframe containing a column 'sales_date' of datetime type
+    Returns:
+    df : modified pandas dataframe 
     """
     df["sales_date"] = df.sales_date.astype('int64')/1e9
     df["competitor_price_ratio"] = df["competitor_price"]/df["retail_price"]
@@ -289,35 +314,7 @@ def generateTimeSeriesSplits(trains, tests, df):
         tr,ts = df[df.sales_date.isin(tr)].copy(), df[df.sales_date.isin(ts)].copy()
         yield tr.sort_values(["encoded_sku_id","sales_date"]).reset_index(drop=True),ts.sort_values(["encoded_sku_id","sales_date"]).reset_index(drop=True)
 
-def objective(trial):
-    """
-    This function is using Optuna library to perform a hyperparameter tuning for an XGBoost model. 
-    The function takes a dataframe as input, and splits it into a train and test set using the generateTimeSeriesSplits function. 
-    It then uses the Optuna library to perform a random search of the hyperparameter space to find the best set of hyperparameters. 
-    The parameters being tuned are max_depth, eta, colsample_bytree, and gamma.
-    It then fits an XGBoost model with the best hyperparameters on the training data, and predicts on the test set. 
-    The objective of the tuning is to minimize the Root Mean Squared Error (RMSE) of the predictions on the test set.
-    It returns the RMSE of the predictions on the test set.
-    """
-    generator = generateTimeSeriesSplits(trains, tests, df)
-    params = {
-        'max_depth': trial.suggest_int('max_depth', 2, 5),
-        'eta': trial.suggest_uniform('eta', 0.01, 0.2),
-        'colsample_bytree': trial.suggest_uniform('colsample_bytree', 0.1, 1.0),
-        'gamma' : trial.suggest_uniform('gamma', 0.1, 10),
-    }
-    for i,ts in enumerate(tests):
-        tr,ts = next(generator)
-        if i<9:
-            continue
-        reg = xgb(**params)
-        xtr,ytr = tr.drop("daily_units", axis=1), tr["daily_units"]
-        ts_save =  ts.copy()
-        reg.fit(xtr,ytr)
-        yts = reg.predict(ts.drop("daily_units",axis=1))
-    return mean_squared_error(ts_save["daily_units"], yts, squared=False)
-
-def objective(trial):
+def OneDayForecast(trial):
     """
     This function is an objective function for an optimization algorithm. It is used to optimize the parameters of a lightgbm regressor (lbr) to minimize the mean squared error between the predicted values and actual values.
 
@@ -331,6 +328,12 @@ def objective(trial):
     The function then creates an instance of the lightgbm regressor with the suggested parameter values, and trains the model on the input data (tr) and 
     corresponding target values (daily_units). Then it makes prediction on the test data (ts) and calculates the mean squared error between the predicted values and actual values. 
     The function returns the square root of the mean squared error as the final output.
+
+    Args:
+    trial : pandas dataframe
+    Returns:
+    df : scalar, RMSE of the predictions on the test set
+
     """
     params = {
         'max_depth': trial.suggest_int('max_depth', 2, 5),
@@ -346,7 +349,7 @@ def objective(trial):
     yts = reg.predict(ts.drop("daily_units",axis=1))
     return mean_squared_error(ts_save["daily_units"], yts, squared=False)
 
-def objective(trial):
+def SevenDaysForecast(trial):
     """
     The function objective(trial) is using Optuna library to perform a hyperparameter optimization for the LightGBM model. 
     The trial object is passed to the function and it uses the suggest methods of this object to sample the hyperparameters.
@@ -361,6 +364,12 @@ def objective(trial):
     the predictions of the model on the test data and updates the predicted values for the next day based on the previous days predictions.
 
     Finally, the function returns the mean squared error between the predicted and actual values of the test data.
+
+    Args:
+    trial : pandas dataframe
+    Returns:
+    df : scalar, RMSE of the predictions on the test set
+
     """
 
     params = {
