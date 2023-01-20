@@ -13,6 +13,35 @@ from statsmodels.graphics import tsaplots
 from statsmodels.tsa.seasonal import STL
 import optuna
 
+def loadTrainData():
+    data=pd.read_excel("data/Hackathon Data.xlsx",engine='openpyxl')
+    data = data[~data.Encoded_SKU_ID.isna()]
+    data = data[[i for i in data.columns if "Unnamed" not in i]]
+    print("Shape of Train Dataset: ", data.shape)
+    display(data.head())
+    return data
+
+def loadValidationData():
+    val=pd.read_excel("data/Validation_Data.xlsx",engine='openpyxl')
+    val = val[~val.Encoded_SKU_ID.isna()]
+    val = val[[i for i in val.columns if "Unnamed" not in i]]
+    print("Shape of Validation Dataset: ", val.shape)
+    display(val.head())
+    return val
+
+def externalDataSources():
+    dow_jones_index = pd.read_csv('data/dow_jones.csv')
+    gscpi = pd.read_csv('data/gscpi_data.csv',names = ["sales_date", "gscpi"])
+    gscpi["sales_date"] = pd.to_datetime(gscpi["sales_date"])
+    owid = pd.read_csv('data/owid-covid-data.csv')
+    owid = owid[owid["location"]=="United States"][["date", "total_cases", "new_cases"]].rename(columns = {"date":"sales_date"})
+    owid["sales_date"] = pd.to_datetime(owid["sales_date"])
+    trend = pd.read_csv('data/norm_trend_all_skus.csv')
+    trend.columns = [i.lower() for i in trend.columns]
+    trend = trend[["encoded_sku_id", "sales_date", "norm_trend"]]
+    trend["sales_date"] = pd.to_datetime(trend["sales_date"])
+    return dow_jones_index, gscpi, owid, trend
+
 def addDateCols(df):
     """
     This function takes in a pandas dataframe as an argument and adds new columns to it based on the 'sales_date' column.
@@ -254,13 +283,14 @@ def cleanData(df):
     Returns:
     df : cleaned and transformed dataframe
     """
+    dow_jones_index, gscpi, owid, trend = externalDataSources()
     df = cleanNonObjColumns(df)
     df["daily_units"] = np.where(df.daily_units<0, 0, df.daily_units)
     dates = sorted(df.sales_date.unique())
     start, end = dates[0],dates[-8]
     df = df.groupby('encoded_sku_id').apply(lambda x: fillMissingDates(x, start, end))
-    df = addMarket(df)
-    df = addCovidGSCPI(df)
+    df = addMarket(df, dow_jones_index)
+    df = addCovidGSCPI(df, owid, gscpi, trend)
     df = addDateCols(df)
     df = cleanObjColumns(df)
     df = featureEng(df)
